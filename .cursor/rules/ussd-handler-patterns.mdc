@@ -1,0 +1,958 @@
+# USSD Handler Development Rules
+
+## Overview
+These rules define the mandatory patterns for all USSD handlers in the Expenses.API project. Every handler MUST follow these patterns exactly to ensure consistency, maintainability, and proper navigation behavior.
+
+## 1. Handler Structure
+
+### 1.1 Base Class Extension
+**MANDATORY**: All USSD handlers MUST extend `BaseUssdHandler`
+
+```csharp
+public class YourHandler(TransactionService service, ILogger<YourHandler> logger) : BaseUssdHandler {
+    // Implementation
+}
+```
+
+❌ **NEVER** implement `IUssdMenuHandler` directly
+✅ **ALWAYS** extend `BaseUssdHandler`
+
+### 1.2 Constructor Pattern
+**MANDATORY**: Use primary constructor with required dependencies
+
+```csharp
+public class YourHandler(
+    TransactionService transactionService, 
+    ILogger<YourHandler> logger
+) : BaseUssdHandler
+```
+
+Required dependencies:
+- Service layer (e.g., `TransactionService`)
+- `ILogger<T>` for logging
+
+## 2. Step Management Pattern
+
+### 2.1 Step Enumeration
+**MANDATORY**: Define a private `StepName` enum
+
+```csharp
+private enum StepName {
+    StepOne,
+    StepTwo,
+    StepThree
+}
+```
+
+### 2.2 Step Registry
+**MANDATORY**: Define `StepOrder` array to establish step sequence
+
+```csharp
+private static readonly StepName[] StepOrder = {
+    StepName.StepOne,      // Automatically becomes step 0
+    StepName.StepTwo,      // Automatically becomes step 1
+    StepName.StepThree     // Automatically becomes step 2
+};
+```
+
+**Purpose**: Reordering steps only requires changing this array
+
+### 2.3 Step Constants
+**MANDATORY**: Derive step numbers from `StepOrder` array position
+
+```csharp
+private static int StepStepOne => Array.IndexOf(StepOrder, StepName.StepOne);
+private static int StepStepTwo => Array.IndexOf(StepOrder, StepName.StepTwo);
+```
+
+❌ **NEVER** hard-code step numbers like `const int StepStepOne = 0`
+✅ **ALWAYS** use `Array.IndexOf(StepOrder, StepName.X)`
+
+### 2.4 Base Class Properties
+**MANDATORY**: Override these properties
+
+```csharp
+protected override UssdMenuName MenuName => UssdMenuName.YourMenu;
+protected override int TotalSteps => StepOrder.Length;
+```
+
+## 3. HandleAsync Method Pattern
+
+### 3.1 Main Handler Structure
+**MANDATORY**: Follow this exact structure
+
+```csharp
+public override async Task<UssdHandlerResult> HandleAsync(UssdRequest request, UssdState state) {
+    try {
+        // 1. Check if menu changed to MainMenu
+        if (state.CurrentMenu == UssdMenuName.MainMenu.ToString()) {
+            return new UssdHandlerResult(UssdResponse.Continue(""), state);
+        }
+
+        // 2. Route to appropriate step handler using if-else chain
+        if (state.CurrentStep == StepStepOne) {
+            return await HandleStepOne(request, state);
+        }
+        
+        if (state.CurrentStep == StepStepTwo) {
+            return await HandleStepTwo(request, state);
+        }
+
+        // 3. Fallback error
+        return new UssdHandlerResult(
+            UssdResponse.End("An error occurred. Please dial again to restart.\n\nThank you for using Expenses App!"),
+            state
+        );
+    } catch (Exception ex) {
+        // 4. Comprehensive logging
+        logger.LogError(ex,
+            "Exception in YourHandler.HandleAsync. PhoneNumber: {PhoneNumber}, SessionId: {SessionId}, CurrentMenu: {CurrentMenu}, CurrentStep: {CurrentStep}, Input: {Input}",
+            request.PhoneNumber,
+            request.SessionId,
+            state.CurrentMenu,
+            state.CurrentStep,
+            request.Input);
+
+        return new UssdHandlerResult(
+            UssdResponse.End("An error occurred. Please dial again to restart.\n\nThank you for using Expenses App!"),
+            state
+        );
+    }
+}
+```
+
+**Key Points**:
+- ❌ **NEVER** use switch statements (step values are computed at runtime)
+- ✅ **ALWAYS** use if-else chain for routing
+- ✅ **ALWAYS** wrap in try-catch with comprehensive logging
+- ✅ **ALWAYS** check for MainMenu navigation first
+
+## 4. Individual Step Handlers
+
+### 4.1 Step Handler Structure
+**MANDATORY**: Each step has its own handler method
+
+```csharp
+private async Task<UssdHandlerResult> HandleStepOne(UssdRequest request, YourState state) {
+    var currentStep = StepStepOne;
+
+    // Step-specific logic here
+    
+    return await ProcessStepCompletion(currentStep, state);
+}
+```
+
+### 4.2 Standard Step Pattern (Input Collection)
+**For steps that collect user input**:
+
+```csharp
+private async Task<UssdHandlerResult> HandleStepOne(UssdRequest request, YourState state) {
+    var currentStep = StepStepOne;
+
+    // 1. Use HandleStepPreprocessing for empty input and navigation
+    var preprocessResult = HandleStepPreprocessing(request, state, currentStep, GetStepOnePrompt());
+    if (preprocessResult != null) {
+        return preprocessResult;
+    }
+
+    // 2. Validate and process input
+    var input = request.Input.Trim();
+    if (/* validation fails */) {
+        return ReturnError(state, currentStep, "Error message");
+    }
+
+    // 3. Store validated input in state
+    state.SomeProperty = input;
+
+    // 4. Process completion
+    return await ProcessStepCompletion(currentStep, state);
+}
+```
+
+### 4.3 Display-Only Last Step Pattern
+**For last step that only displays data**:
+
+```csharp
+private async Task<UssdHandlerResult> HandleLastStep(UssdRequest request, YourState state) {
+    var currentStep = StepLastStep;
+
+    // 1. Load data first
+    var data = await LoadData();
+    if (data == null) {
+        return new UssdHandlerResult(
+            UssdResponse.End("Error loading data.\n\nPlease try again later."),
+            state
+        );
+    }
+
+    // 2. For both empty and non-empty input, always go through ProcessStepCompletion
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        // First entry - ProcessStepCompletion will END since this is last step
+        return await ProcessStepCompletion(currentStep, state, data);
+    }
+
+    // 3. For non-empty input, use HandleStepPreprocessing for navigation
+    var prompt = $"{GetLastStepPrompt()}\n{FormatData(data)}";
+    var preprocessResult = HandleStepPreprocessing(request, state, currentStep, prompt);
+    if (preprocessResult != null) {
+        return preprocessResult;
+    }
+
+    // 4. Any other input goes through ProcessStepCompletion
+    return await ProcessStepCompletion(currentStep, state, data);
+}
+```
+
+**Key Rules**: 
+- Last display-only steps must END immediately via ProcessStepCompletion
+- NEVER call CompleteXxx directly from step handlers
+- ALWAYS pass loaded data to ProcessStepCompletion to avoid duplicate queries
+
+### 4.4 Prompt Methods
+**MANDATORY**: Each step has its own prompt method
+
+```csharp
+private string GetStepOnePrompt() {
+    return "Enter step one data:";
+}
+
+private string GetStepTwoPrompt() {
+    return "Enter step two data:";
+}
+```
+
+## 5. Step Completion Pattern
+
+### 5.1 ProcessStepCompletion Method
+**MANDATORY**: This is the ONLY method that should call CompleteXxx methods
+
+```csharp
+private async Task<UssdHandlerResult> ProcessStepCompletion(int currentStep, YourState state, YourData? data = null) {
+    // If this is the final step, end the session
+    if (IsLastStep(currentStep)) {
+        // Load data if not provided (for non-display steps)
+        if (data == null) {
+            data = await LoadData();
+        }
+        return await CompleteYourFlow(state, data);
+    }
+
+    // Otherwise, proceed to the next step
+    var nextStep = GetNextStep(currentStep);
+    state.CurrentStep = nextStep;
+
+    // Check if the next step is the final step - if so, complete and END
+    if (IsLastStep(nextStep)) {
+        // Load data if not provided (for transitions to display steps)
+        if (data == null) {
+            data = await LoadData();
+        }
+        return await CompleteYourFlow(state, data);
+    }
+
+    // For non-final steps, get the prompt and continue
+    var nextStepPrompt = GetPromptForStep(nextStep);
+    var navOptions = GetNavigationOptions(state.CurrentStep);
+    return new UssdHandlerResult(
+        UssdResponse.Continue($"{nextStepPrompt}{navOptions}"),
+        state
+    );
+}
+```
+
+**Critical Rules**: 
+- ProcessStepCompletion is the ONLY method that calls CompleteXxx
+- Accept optional data parameter to avoid duplicate database queries
+- Check both current step and next step for completion
+- ALWAYS END instead of CONTINUE on last step
+
+### 5.2 Complete Method
+**MANDATORY**: Final completion method that ends the session (ONLY called by ProcessStepCompletion)
+
+```csharp
+private async Task<UssdHandlerResult> CompleteYourFlow(YourState state, YourData? data) {
+    try {
+        // Data should be passed in, but handle null case defensively
+        if (data == null) {
+            data = await LoadData();
+        }
+        
+        if (data == null) {
+            return new UssdHandlerResult(
+                UssdResponse.End("Error loading data.\n\nThank you for using Expenses App!"),
+                state
+            );
+        }
+
+        // Perform final action (e.g., save to database, display final data)
+        var result = await PerformFinalAction(state, data);
+
+        // Clear state
+        ClearTransactionData(state);
+        state.CurrentStep = 0;
+
+        return new UssdHandlerResult(
+            UssdResponse.End($"Success message\n\nThank you for using Expenses App!"),
+            state
+        );
+    } catch (Exception ex) {
+        logger.LogError(ex,
+            "Exception in YourHandler.CompleteYourFlow. PhoneNumber: {PhoneNumber}, SessionId: {SessionId}",
+            state.PhoneNumber,
+            state.SessionId);
+
+        return new UssdHandlerResult(
+            UssdResponse.End("Error message\n\nPlease try again later."),
+            state
+        );
+    }
+}
+```
+
+**Key Points**:
+- ✅ **ONLY** called by ProcessStepCompletion (NEVER directly from step handlers)
+- ✅ Accept data parameter to avoid duplicate queries
+- ✅ Handle null data defensively (fallback to loading)
+- ✅ **ALWAYS** use `UssdResponse.End()` (not Continue)
+- ✅ **ALWAYS** clear state data
+- ✅ **ALWAYS** reset CurrentStep to 0
+- ✅ **ALWAYS** include try-catch with logging
+
+## 6. Prompt Management
+
+### 6.1 GetPromptForStepInternal Implementation
+**MANDATORY**: Implement abstract method from BaseUssdHandler
+
+```csharp
+protected override string GetPromptForStepInternal(int step) {
+    var stepName = StepOrder[step];
+    return GetPromptForStepName(stepName);
+}
+
+private string GetPromptForStepName(StepName stepName) {
+    return stepName switch {
+        StepName.StepOne => GetStepOnePrompt(),
+        StepName.StepTwo => GetStepTwoPrompt(),
+        StepName.StepThree => GetStepThreePrompt(),
+        _ => "Continue:"
+    };
+}
+```
+
+## 7. State Management
+
+### 7.1 ClearCurrentStepData Implementation
+**MANDATORY**: Clear data when navigating back
+
+```csharp
+protected override void ClearCurrentStepData(UssdState state, int step) {
+    if (state is not YourState yourState) {
+        return;
+    }
+
+    if (step < 0 || step >= StepOrder.Length) {
+        return;
+    }
+
+    var stepName = StepOrder[step];
+
+    switch (stepName) {
+        case StepName.StepOne:
+            yourState.PropertyOne = null;
+            break;
+        case StepName.StepTwo:
+            yourState.PropertyTwo = null;
+            break;
+    }
+}
+```
+
+### 7.2 ClearTransactionData Implementation
+**MANDATORY**: Clear all handler-specific data
+
+```csharp
+protected override void ClearTransactionData(UssdState state) {
+    if (state is not YourState yourState) {
+        return;
+    }
+
+    yourState.PropertyOne = null;
+    yourState.PropertyTwo = null;
+    yourState.PropertyThree = null;
+}
+```
+
+## 8. Navigation Handling
+
+### 8.1 Use HandleStepPreprocessing
+**MANDATORY**: For standard steps, use `HandleStepPreprocessing` from BaseUssdHandler
+
+```csharp
+var preprocessResult = HandleStepPreprocessing(request, state, currentStep, prompt);
+if (preprocessResult != null) {
+    return preprocessResult;
+}
+```
+
+This automatically handles:
+- Empty input (shows prompt with navigation options)
+- `#` command (back to previous step)
+- `##` command (return to main menu)
+
+### 8.2 DO NOT Duplicate Navigation Logic
+❌ **NEVER** manually implement navigation command handling
+❌ **NEVER** call `HandleNavigation` directly and then duplicate the checks
+
+```csharp
+// ❌ BAD - Duplicates BaseUssdHandler logic
+HandleNavigation(request, state, currentStep);
+if (state.CurrentStep != currentStep) {
+    var prompt = GetPromptForStep(state.CurrentStep);
+    var navOptions = GetNavigationOptions(state.CurrentStep);
+    return new UssdHandlerResult(
+        UssdResponse.Continue($"{prompt}{navOptions}"),
+        state
+    );
+}
+```
+
+✅ **ALWAYS** use `HandleStepPreprocessing` which does everything
+
+## 9. Special Cases
+
+### 9.1 Pagination Steps
+**For steps with pagination** (like category selection):
+
+```csharp
+private async Task<UssdHandlerResult> HandlePaginatedStep(UssdRequest request, YourState state) {
+    var currentStep = StepPaginated;
+
+    // Handle empty input separately (show current page)
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        var navigationOptions = GetNavigationOptionsForPagination(currentStep);
+        return new UssdHandlerResult(
+            UssdResponse.Continue($"{GetPrompt()}\n{GetPageData(state.Page)}{navigationOptions}"),
+            state
+        );
+    }
+
+    var input = request.Input.Trim();
+
+    // Handle navigation commands (# for back, ## for main menu)
+    HandleNavigation(request, state, currentStep);
+
+    // Check if navigation changed state
+    if (state.CurrentStep != currentStep || state.CurrentMenu != MenuName.ToString()) {
+        // Handle navigation change
+        state.Page = 0; // Reset pagination
+        // ... rest of logic
+    }
+
+    // Handle pagination commands (* for next, ** for previous)
+    if (input == NextPageCommand) {
+        // Handle next page
+    }
+
+    if (input == PreviousPageCommand) {
+        // Handle previous page
+    }
+
+    // Handle actual selection
+    // ... rest of logic
+}
+```
+
+## 10. Data Loading Pattern
+
+### 10.1 Load Methods
+**MANDATORY**: Create separate load methods for database operations
+
+```csharp
+private async Task<YourData?> LoadData() {
+    try {
+        return await service.GetData();
+    } catch (Exception ex) {
+        logger.LogError(ex, "Error loading data in YourHandler.LoadData");
+        return null;
+    }
+}
+```
+
+### 10.2 Format Methods
+**MANDATORY**: Create separate format methods for display
+
+```csharp
+private string FormatData(YourData data) {
+    return $"─────────────────────\n" +
+           $"Field1: {data.Field1}\n" +
+           $"Field2: {data.Field2}\n" +
+           $"Field3: {data.Field3}";
+}
+```
+
+## 11. Error Handling
+
+### 11.1 Comprehensive Logging
+**MANDATORY**: Log all exceptions with relevant context
+
+```csharp
+logger.LogError(ex,
+    "Exception in YourHandler.MethodName. PhoneNumber: {PhoneNumber}, SessionId: {SessionId}, Property1: {Property1}, Property2: {Property2}",
+    request.PhoneNumber,
+    request.SessionId,
+    state.Property1,
+    state.Property2);
+```
+
+### 11.2 User-Friendly Error Messages
+**MANDATORY**: Always return helpful error messages to users
+
+```csharp
+return new UssdHandlerResult(
+    UssdResponse.End("Error performing action.\n\nPlease try again later."),
+    state
+);
+```
+
+## 12. Checklist for New Handlers
+
+Before submitting a new USSD handler, verify:
+
+- [ ] Extends `BaseUssdHandler`
+- [ ] Has `StepName` enum
+- [ ] Has `StepOrder` array
+- [ ] Step constants use `Array.IndexOf(StepOrder, ...)`
+- [ ] Overrides `MenuName` and `TotalSteps`
+- [ ] `HandleAsync` checks for MainMenu navigation first
+- [ ] `HandleAsync` uses if-else chain (not switch)
+- [ ] Each step has its own handler method
+- [ ] Each step has its own prompt method
+- [ ] Uses `HandleStepPreprocessing` for standard steps
+- [ ] Last display steps go through ProcessStepCompletion (not CompleteXxx directly)
+- [ ] Has `ProcessStepCompletion` method (ONLY place that calls CompleteXxx)
+- [ ] Has `CompleteXxx` method with END response (accepts data parameter)
+- [ ] ProcessStepCompletion accepts optional data parameter to avoid duplicate queries
+- [ ] Step handlers pass loaded data to ProcessStepCompletion
+- [ ] Implements `GetPromptForStepInternal`
+- [ ] Implements `ClearCurrentStepData`
+- [ ] Implements `ClearTransactionData`
+- [ ] All exceptions are logged with context
+- [ ] All error messages are user-friendly
+- [ ] Follows naming conventions (HandleXxx, GetXxxPrompt)
+
+## 13. Common Mistakes to Avoid
+
+❌ Implementing `IUssdMenuHandler` directly instead of extending `BaseUssdHandler`
+❌ Hard-coding step numbers
+❌ Using switch statements for step routing
+❌ Duplicating navigation logic instead of using `HandleStepPreprocessing`
+❌ Showing CONTINUE prompt for last display-only steps
+❌ Missing the check for "next step is last step" in `ProcessStepCompletion`
+❌ Calling `CompleteXxx` directly from step handlers (should ONLY be called by ProcessStepCompletion)
+❌ Not passing loaded data to ProcessStepCompletion (causes duplicate database queries)
+❌ Not logging exceptions with context
+❌ Not clearing state in completion methods
+❌ Using `UssdResponse.Continue()` in completion methods
+
+## 14. Reference Implementations
+
+See these handlers for reference:
+- `AddTransactionHandler.cs` - Multi-step input collection with pagination
+- `TransactionHistoryHandler.cs` - Multi-step with list selection and detail view
+- `AccountBalanceHandler.cs` - Single display-only step
+
+Follow these patterns EXACTLY. Do not deviate unless there is a documented exceptional case.
+
+## 15. Real-World Use Cases
+
+This section demonstrates how the patterns are applied in actual handlers from the Expenses.API project, showing concrete examples of different step handling scenarios.
+
+### 15.1 Constants and Error Messages Pattern
+
+All handlers follow a consistent pattern for organizing constants at the top of the class:
+
+```csharp
+public class YourHandler(...) : BaseUssdHandler {
+    // Visual formatting constants
+    private const string VisualDivider = "─────────────────────";
+
+    // Pagination constants (if needed)
+    private const int ItemsPerPage = 5;
+    private const string NextPageCommand = "*";
+    private const string PreviousPageCommand = "**";
+
+    // Error messages
+    private static class ErrorMessages {
+        public const string GenericError = "An error occurred. Please dial again to restart.\n\nThank you for using Expenses App!";
+        public const string SpecificError = "Specific error message...";
+        // ... more error messages
+    }
+
+    // Step name enum
+    private enum StepName {
+        // ... steps
+    }
+    // ... rest of handler
+}
+```
+
+**Benefits**:
+- Centralized error messages - easy to update
+- Visual constants reusable across format methods
+- Pagination constants clearly defined
+- Consistent structure across all handlers
+
+### 15.2 Use Case 1: Multi-Step Input Collection (AddTransactionHandler)
+
+**Scenario**: Handler with 5 steps collecting different types of input
+
+**Steps**:
+1. **TransactionType** (Step 0) - Select from options (Income/Expense)
+2. **Category** (Step 1) - Paginated list selection
+3. **Amount** (Step 2) - Numeric input validation
+4. **Description** (Step 3) - Text input
+5. **Confirmation** (Step 4) - Display-only final step with database save
+
+**Key Implementation Points**:
+- State conversion with `EnsureAddTransactionState()`
+- Method naming: `HandleTransactionType()`, `HandleCategoryStep()`, etc.
+- Paginated step uses helper methods for cleaner code
+- Final step creates transaction before displaying
+- 9 helper methods extracted for category pagination
+
+**Flow Diagram**:
+
+```mermaid
+flowchart TD
+    Start[User Enters Menu] --> Type[Step 0: Transaction Type]
+    Type -->|Valid Input| Cat[Step 1: Category]
+    Cat -->|Valid Selection| Amt[Step 2: Amount]
+    Amt -->|Valid Amount| Desc[Step 3: Description]
+    Desc -->|Valid Text| Conf[Step 4: Confirmation]
+    Conf -->|Create & Save| End[END Session]
+    
+    Type -->|# Back or ## Menu| MainMenu[Return to Main Menu]
+    Cat -->|# Back| Type
+    Amt -->|# Back| Cat
+    Desc -->|# Back| Amt
+    Conf -->|# Back| Desc
+    
+    Cat -->|* or **| CatPage[Next/Previous Page]
+    CatPage --> Cat
+```
+
+**Step Handler Examples**:
+
+```csharp
+// EXAMPLE 1: Simple input validation step (TransactionType)
+private async Task<UssdHandlerResult> HandleTransactionType(UssdRequest request, AddTransactionState state) {
+    var currentStep = StepTransactionType;
+    
+    // Use HandleStepPreprocessing for empty input and navigation
+    var preprocessResult = HandleStepPreprocessing(request, state, currentStep, GetTransactionTypePrompt());
+    if (preprocessResult != null) return preprocessResult;
+
+    var input = request.Input.Trim();
+    if (input == "1") {
+        state.TransactionType = "Income";
+    } else if (input == "2") {
+        state.TransactionType = "Expense";
+    } else {
+        return ReturnError(state, currentStep, ErrorMessages.InvalidTransactionType);
+    }
+
+    return await ProcessStepCompletion(currentStep, state);
+}
+
+// EXAMPLE 2: Paginated step with helper methods (Category)
+private async Task<UssdHandlerResult> HandleCategoryStep(UssdRequest request, AddTransactionState state) {
+    var currentStep = StepCategory;
+
+    // Handle empty input - show current page
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        return ShowCategoryPage(state, currentStep);
+    }
+
+    var input = request.Input.Trim();
+    HandleNavigation(request, state, currentStep);
+
+    // If navigation changed the step or menu
+    if (state.CurrentStep != currentStep || state.CurrentMenu != MenuName.ToString()) {
+        return HandleCategoryNavigationChange(state, currentStep);
+    }
+
+    // Handle pagination commands
+    var paginationResult = HandleCategoryPagination(input, state, currentStep);
+    if (paginationResult != null) return paginationResult;
+
+    // Handle category selection
+    if (TryParseCategorySelection(input, out var category)) {
+        state.TransactionCategory = category;
+        state.CategoryPage = 0;
+        return await ProcessStepCompletion(currentStep, state);
+    }
+
+    return ShowCategoryError(state, currentStep);
+}
+
+// EXAMPLE 3: Display-only final step with data creation (Confirmation)
+private async Task<UssdHandlerResult> HandleConfirmationStep(UssdRequest request, AddTransactionState state) {
+    var currentStep = StepConfirmation;
+
+    // Create the transaction first
+    var transaction = await CreateTransaction(state);
+    if (transaction == null) {
+        return new UssdHandlerResult(
+            UssdResponse.End(ErrorMessages.TransactionCreationFailed),
+            state
+        );
+    }
+
+    // For empty input, go directly through ProcessStepCompletion
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        return await ProcessStepCompletion(currentStep, state, transaction);
+    }
+
+    // For non-empty input, use standard preprocessing to handle navigation
+    var prompt = $"{GetConfirmationPrompt()}\n{FormatTransactionConfirmation(transaction)}";
+    var preprocessResult = HandleStepPreprocessing(request, state, currentStep, prompt);
+
+    return preprocessResult ?? await ProcessStepCompletion(currentStep, state, transaction);
+}
+```
+
+**Helper Methods for Pagination**:
+- `ShowCategoryPage()` - Displays current page
+- `HandleCategoryNavigationChange()` - Handles back/menu navigation
+- `HandleCategoryPagination()` - Manages next/previous page
+- `TryParseCategorySelection()` - Validates selection
+- `ShowCategoryError()` - Displays error message
+
+### 15.3 Use Case 2: Multi-Step with List Selection (TransactionHistoryHandler)
+
+**Scenario**: 2-step handler with paginated list and detail view
+
+**Steps**:
+1. **TransactionList** (Step 0) - Paginated list with selection
+2. **TransactionDetail** (Step 1) - Display selected transaction details
+
+**Key Implementation Points**:
+- State conversion with `EnsureTransactionHistoryState()`
+- Caching displayed transactions for selection mapping (`DisplayedTransactions` dictionary)
+- Both steps are display steps (no data collection)
+- 5 helper methods for pagination, selection, and errors
+- Handles "not found" scenario by returning to list
+
+**Flow Diagram**:
+
+```mermaid
+flowchart TD
+    Start[User Enters Menu] --> List[Step 0: Transaction List]
+    List -->|Load Transactions| Display[Display Paginated List]
+    Display -->|User Selects| Detail[Step 1: Transaction Detail]
+    Detail -->|Load Transaction| Show[Display Details]
+    Show --> End[END Session]
+    
+    Display -->|* Next| NextPage[Load Next Page]
+    Display -->|** Previous| PrevPage[Load Previous Page]
+    NextPage --> Display
+    PrevPage --> Display
+    
+    List -->|## Main Menu| MainMenu[Return to Main Menu]
+    Detail -->|# Back| List
+    Detail -->|Not Found| List
+```
+
+**Step Handler Examples**:
+
+```csharp
+// EXAMPLE 1: Paginated list step with selection (TransactionList)
+private async Task<UssdHandlerResult> HandleTransactionListStep(UssdRequest request, TransactionHistoryState state) {
+    var currentStep = StepTransactionList;
+
+    // Handle empty input - show current page
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        return await ShowTransactionListPage(state, currentStep);
+    }
+
+    var input = request.Input.Trim();
+    HandleNavigation(request, state, currentStep);
+
+    // If navigation changed the step or menu
+    if (state.CurrentStep != currentStep || state.CurrentMenu != MenuName.ToString()) {
+        return await HandleTransactionListNavigationChange(state, currentStep);
+    }
+
+    // Load transactions for pagination and selection handling
+    var (transactions, totalCount) = await LoadTransactions(state);
+
+    // Handle pagination commands
+    var paginationResult = await HandleTransactionListPagination(input, state, currentStep, transactions, totalCount);
+    if (paginationResult != null) return paginationResult;
+
+    // Handle transaction selection
+    if (TryParseTransactionSelection(input, state, out var transactionId)) {
+        state.SelectedTransactionId = transactionId;
+        return await ProcessStepCompletion(currentStep, state);
+    }
+
+    // Invalid input
+    return ShowTransactionSelectionError(state, currentStep, transactions, totalCount);
+}
+
+// EXAMPLE 2: Display-only detail step with error handling (TransactionDetail)
+private async Task<UssdHandlerResult> HandleTransactionDetailStep(UssdRequest request, TransactionHistoryState state) {
+    var currentStep = StepTransactionDetail;
+
+    // Load transaction first to check if it exists
+    var transaction = await LoadTransactionById(state.SelectedTransactionId);
+    if (transaction == null) {
+        // Transaction not found - go back to list with error message
+        state.SelectedTransactionId = null;
+        state.CurrentStep = GetPreviousStep(currentStep);
+        
+        var (transactions, totalCount) = await LoadTransactions(state);
+        var navigationOptions = GetNavigationOptionsForTransactionList(state.CurrentStep);
+        return new UssdHandlerResult(
+            UssdResponse.Continue($"{ErrorMessages.TransactionNotFoundWithHistory}\n\n{GetTransactionListPrompt()}\n{FormatTransactionList(transactions, state.TransactionPage, totalCount)}{navigationOptions}"),
+            state
+        );
+    }
+
+    // For empty input, go directly to completion
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        return await ProcessStepCompletion(currentStep, state, transaction);
+    }
+
+    // For non-empty input, use standard preprocessing to handle navigation
+    var prompt = $"{GetTransactionDetailPrompt()}\n{FormatTransactionDetail(transaction)}";
+    var preprocessResult = HandleStepPreprocessing(request, state, currentStep, prompt);
+    if (preprocessResult != null) return preprocessResult;
+
+    return await ProcessStepCompletion(currentStep, state, transaction);
+}
+```
+
+**Helper Methods**:
+- `ShowTransactionListPage()` - Displays current page
+- `HandleTransactionListNavigationChange()` - Handles navigation
+- `HandleTransactionListPagination()` - Manages pagination
+- `TryParseTransactionSelection()` - Validates selection
+- `ShowTransactionSelectionError()` - Displays error
+
+### 15.4 Use Case 3: Single Display-Only Step (AccountBalanceHandler)
+
+**Scenario**: Simple 1-step handler that loads and displays data
+
+**Steps**:
+1. **BalanceDisplay** (Step 0) - Load balance data and display (single step)
+
+**Key Implementation Points**:
+- No state conversion needed (uses base `UssdState`)
+- Single step that loads data and displays immediately
+- No navigation between steps (only back to main menu via ##)
+- Simplest handler pattern - no helper methods needed
+- Demonstrates minimum viable handler structure
+
+**Flow Diagram**:
+
+```mermaid
+flowchart TD
+    Start[User Enters Menu] --> Load[Step 0: Load Balance]
+    Load -->|Calculate Balance| Display[Display Balance Info]
+    Display --> End[END Session]
+    
+    Display -->|## Main Menu| MainMenu[Return to Main Menu]
+```
+
+**Step Handler Example**:
+
+```csharp
+// EXAMPLE: Single display-only step (BalanceDisplay)
+private async Task<UssdHandlerResult> HandleBalanceDisplayStep(UssdRequest request, UssdState state) {
+    var currentStep = StepBalanceDisplay;
+
+    // Load balance data first
+    var balanceResult = await LoadBalance();
+    if (balanceResult == null) {
+        return new UssdHandlerResult(
+            UssdResponse.End(ErrorMessages.BalanceLoadError),
+            state
+        );
+    }
+
+    // For empty input, go directly through ProcessStepCompletion
+    if (string.IsNullOrWhiteSpace(request.Input)) {
+        return await ProcessStepCompletion(currentStep, state, balanceResult);
+    }
+
+    // For non-empty input, use standard preprocessing to handle navigation
+    var prompt = $"{GetBalanceDisplayPrompt()}\n{FormatBalanceDisplay(balanceResult)}";
+    var preprocessResult = HandleStepPreprocessing(request, state, currentStep, prompt);
+    if (preprocessResult != null) {
+        return preprocessResult;
+    }
+
+    return await ProcessStepCompletion(currentStep, state, balanceResult);
+}
+```
+
+**Key Observations**:
+- No custom state type required
+- No pagination or complex selection logic
+- ProcessStepCompletion handles the END response automatically
+- Pattern is same as complex handlers, just simpler
+
+### 15.5 Comparison Matrix
+
+| Feature | AddTransactionHandler | TransactionHistoryHandler | AccountBalanceHandler |
+|---------|----------------------|---------------------------|----------------------|
+| **Steps** | 5 | 2 | 1 |
+| **State Type** | AddTransactionState | TransactionHistoryState | UssdState (base) |
+| **State Conversion** | EnsureAddTransactionState() | EnsureTransactionHistoryState() | None needed |
+| **Input Collection** | Yes (steps 0-3) | Yes (step 0 selection) | No |
+| **Display Steps** | Yes (step 4) | Yes (both steps) | Yes (single step) |
+| **Pagination** | Yes (Category step) | Yes (List step) | No |
+| **Database Write** | Yes (final step) | No (read-only) | No (read-only) |
+| **Helper Methods** | 9 helpers for category | 5 helpers for list/selection | None (simple) |
+| **Custom State Props** | 4 properties + page | 2 properties + cache + page | None |
+| **Complexity** | High | Medium | Low |
+| **Lines of Code** | ~650 lines | ~570 lines | ~215 lines |
+
+### 15.6 Step Handler Patterns Summary
+
+**Pattern 1: Simple Input Collection**
+- Use `HandleStepPreprocessing()` for empty input and navigation
+- Validate input
+- Store in state
+- Call `ProcessStepCompletion()`
+- Example: TransactionType, Amount, Description steps
+
+**Pattern 2: Paginated Selection**
+- Handle empty input separately (show current page)
+- Handle navigation commands
+- Handle pagination commands (*, **)
+- Handle selection
+- Call `ProcessStepCompletion()` on valid selection
+- Extract helper methods for each concern
+- Example: Category, TransactionList steps
+
+**Pattern 3: Display-Only Final Step**
+- Load/create data first
+- Check for null (error handling)
+- For empty input → `ProcessStepCompletion()` (will END)
+- For non-empty → use `HandleStepPreprocessing()` for navigation
+- Always pass loaded data to avoid duplicate queries
+- Example: Confirmation, TransactionDetail, BalanceDisplay steps
+
+### 15.7 Key Takeaways
+
+1. **Choose Appropriate Complexity**: Start simple (AccountBalance pattern) and add complexity only when needed
+2. **Extract Helper Methods**: When a step exceeds ~40 lines, extract helpers for pagination, validation, display
+3. **State Conversion**: Use custom state types when storing step-specific data; use `EnsureXxxState()` pattern
+4. **Consistent Naming**: All step handlers use `HandleXxxStep()` suffix for consistency
+5. **Load Data Once**: Always pass loaded data through `ProcessStepCompletion()` to avoid duplicate database calls
+6. **Navigation Consistency**: Use `HandleStepPreprocessing()` for standard steps; handle pagination separately
+7. **Error Handling**: Use centralized `ErrorMessages` class for all user-facing text
+8. **ProcessStepCompletion**: This is the ONLY method that should call `CompleteXxx()` - maintains flow control
+
