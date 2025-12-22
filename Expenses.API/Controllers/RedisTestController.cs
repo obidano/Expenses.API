@@ -82,7 +82,7 @@ namespace Expenses.API.Controllers
                     isConnected = _redis.IsConnected,
                     endpoints = _redis.GetEndPoints().Select(e => e.ToString()),
                     clientName = _redis.ClientName,
-                    serverInfo = info.Select(i => new { section = i.Key, values = i.Value })
+                    serverInfo = info.Select(i => new { section = i.Key, values = i.ToDictionary(kv => kv.Key, kv => kv.Value) })
                 });
             }
             catch (Exception ex)
