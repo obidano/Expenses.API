@@ -1,4 +1,4 @@
-﻿using Expenses.API.Domain.Transaction.Dto;
+using Expenses.API.Domain.Transaction.Dto;
 
 namespace Expenses.API.Domain.Transaction.Services {
     public abstract class TransactionService {
@@ -7,6 +7,8 @@ namespace Expenses.API.Domain.Transaction.Services {
         public abstract Task<Transaction?> getTransactionById(string id);
         public abstract Task<Transaction?> getTransactionById(TransactionFilters filters);
         public abstract Task<List<Transaction>> getAllTransactions();
+        public abstract Task<(List<Transaction> Data, int TotalCount)> getAllTransactions(TransactionFilters filters);
         public abstract Task<bool?> deleteTransaction(string id);
+        public abstract Task<BalanceResult> calculateBalance(TransactionFilters? filters = null);
     }
 }
