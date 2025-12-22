@@ -58,7 +58,7 @@ jobs:
       - name: Set Azure App Settings
         shell: pwsh
         run: |
-          $RESOURCE_GROUP = az webapp show --name ussd-backend-app --query resourceGroup --output tsv
+          $RESOURCE_GROUP = (az webapp list --query "[?name=='ussd-backend-app'].resourceGroup" -o tsv).Trim()
           az webapp config appsettings set --name ussd-backend-app --slot Production --resource-group $RESOURCE_GROUP --settings SQL-PASSWORD="${{ secrets.SQL_PASSWORD }}" REDIS-PASSWORD="${{ secrets.REDIS_PASSWORD }}" --output none
         continue-on-error: false
 
