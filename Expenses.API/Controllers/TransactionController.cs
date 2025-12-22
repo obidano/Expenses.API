@@ -1,4 +1,4 @@
-﻿using Expenses.API.Domain.Transaction;
+using Expenses.API.Domain.Transaction;
 using Expenses.API.Domain.Transaction.Dto;
 using Expenses.API.Domain.Transaction.Services;
 using Expenses.API.framework.Data;
@@ -26,14 +26,32 @@ namespace Expenses.API.Controllers {
         }
 
         [HttpGet]
-        [ProducesResponseType(typeof(ApiResult<Transaction>), 200)]
-        public async Task<IActionResult> getAllTransactions() {
-            var data = await service.getAllTransactions();
-            var result = new {
-                count = data.Count,
-                data
-            };
+        [ProducesResponseType(typeof(PagedResult<Transaction>), 200)]
+        public async Task<IActionResult> getAllTransactions([FromQuery] TransactionFilters? filters = null) {
+            // Set default pagination if not provided
+            filters ??= new TransactionFilters { Page = 1, PageSize = 10 };
+            
+            // Validate and normalize pagination parameters (best practice: set reasonable defaults and limits)
+            if (filters.Page < 1) filters.Page = 1;
+            if (filters.PageSize < 1) filters.PageSize = 10;
+            if (filters.PageSize > 100) filters.PageSize = 100; // Max page size limit to prevent performance issues
+            
+            var (data, totalCount) = await service.getAllTransactions(filters);
+            
+            var result = new PagedResult<Transaction>(
+                data: data,
+                totalCount: totalCount,
+                pageNumber: filters.Page,
+                pageSize: filters.PageSize
+            );
+            
             return Ok(result);
+        }
+
+        [HttpGet("categories")]
+        [ProducesResponseType(typeof(List<string>), 200)]
+        public IActionResult getCategories() {
+            return Ok(TransactionConstants.Categories);
         }
 
         [HttpGet("{id}")]
@@ -64,7 +82,7 @@ namespace Expenses.API.Controllers {
             return Ok(transaction);
         }
 
-        [HttpDelete("delete/{id}")]
+        [HttpDelete("Delete/{id}")]
         [ProducesResponseType(typeof(void), 204)]
         public async Task<IActionResult> deleteTransaction(string id) {
             var transaction = await service.deleteTransaction(id);
