@@ -19,6 +19,9 @@ string? conn = builder.Configuration.GetConnectionString("Default");
 if (string.IsNullOrEmpty(conn))
     throw new InvalidOperationException("La cha�ne de connexion 'Default' est manquante ou vide dans la configuration.");
 
+// Replace placeholders with environment variables for production secrets
+conn = conn.Replace("{SQL_PASSWORD}", Environment.GetEnvironmentVariable("SQL_PASSWORD") ?? "");
+
 builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(conn, options =>
 {
     // Enable retry logic for transient failures (recommended for Azure SQL Database)
@@ -32,6 +35,13 @@ builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(conn, option
 string? redisConnection = builder.Configuration.GetConnectionString("Redis");
 if (string.IsNullOrEmpty(redisConnection))
     throw new InvalidOperationException("Redis connection string is missing or empty in configuration.");
+
+// Replace placeholders with environment variables for production secrets
+var redisPassword = Environment.GetEnvironmentVariable("REDIS_PASSWORD");
+if (!string.IsNullOrEmpty(redisPassword))
+{
+    redisConnection = redisConnection.Replace("{REDIS_PASSWORD}", redisPassword);
+}
 
 bool useEntraId = builder.Configuration.GetValue<bool>("Redis:UseEntraId", false);
 
