@@ -59,7 +59,7 @@ jobs:
         shell: pwsh
         run: |
           $RESOURCE_GROUP = (az webapp list --query "[?name=='ussd-backend-app'].resourceGroup" -o tsv).Trim()
-          az webapp config appsettings set --name ussd-backend-app --slot Production --resource-group $RESOURCE_GROUP --settings SQL-PASSWORD="${{ secrets.SQL_PASSWORD }}" REDIS-PASSWORD="${{ secrets.REDIS_PASSWORD }}" --output none
+          az webapp config appsettings set --name ussd-backend-app --resource-group $RESOURCE_GROUP --settings SQL-PASSWORD="${{ secrets.SQL_PASSWORD }}" REDIS-PASSWORD="${{ secrets.REDIS_PASSWORD }}" --output none
         continue-on-error: false
 
       - name: Deploy to Azure Web App
@@ -67,6 +67,5 @@ jobs:
         uses: azure/webapps-deploy@v3
         with:
           app-name: 'ussd-backend-app'
-          slot-name: 'Production'
           package: .
           
