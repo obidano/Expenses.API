@@ -56,8 +56,9 @@ jobs:
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_2246E9B0BE934E289FA4D8D797C1A628 }}
 
       - name: Set Azure App Settings
+        shell: pwsh
         run: |
-          RESOURCE_GROUP=$(az webapp show --name ussd-backend-app --query resourceGroup --output tsv)
+          $RESOURCE_GROUP = az webapp show --name ussd-backend-app --query resourceGroup --output tsv
           az webapp config appsettings set --name ussd-backend-app --slot Production --resource-group $RESOURCE_GROUP --settings SQL-PASSWORD="${{ secrets.SQL_PASSWORD }}" REDIS-PASSWORD="${{ secrets.REDIS_PASSWORD }}" --output none
         continue-on-error: false
 
