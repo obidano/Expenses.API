@@ -5,6 +5,7 @@ using StackExchange.Redis;
 using Microsoft.Azure.StackExchangeRedis;
 using Azure.Identity;
 using Azure.Core;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -100,25 +101,79 @@ builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngularApp", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        policy.WithOrigins(
+                "http://localhost:4200",
+                "https://red-pebble-0178d9403.2.azurestaticapps.net"
+              )
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
     });
 });
 
+// Add rate limiting
+builder.Services.AddRateLimiter(options =>
+{
+    // Global rate limit policy: 100 requests per minute per IP
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: partition => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 10
+            }));
+
+    // Policy for general API endpoints: 100 requests per minute
+    options.AddPolicy("ApiPolicy", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: partition => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 10
+            }));
+
+    // Stricter policy for authentication endpoints: 10 requests per minute
+    options.AddPolicy("AuthPolicy", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: partition => new FixedWindowRateLimiterOptions
+            {
+                AutoReplenishment = true,
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                QueueLimit = 2
+            }));
+
+    // On rejection, return 429 Too Many Requests
+    options.OnRejected = async (context, token) =>
+    {
+        context.HttpContext.Response.StatusCode = 429;
+        await context.HttpContext.Response.WriteAsync(
+            "Rate limit exceeded. Please try again later.", cancellationToken: token);
+    };
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment()) {
-    //app.MapOpenApi();
-    // add support for swagger#2
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
+// Enable Swagger in all environments (can be restricted to Development only for security)
+app.UseSwagger();
+app.UseSwaggerUI();
 
 // Use CORS - must be before UseHttpsRedirection
 app.UseCors("AllowAngularApp");
+
+// Use rate limiting - should be early in the pipeline
+app.UseRateLimiter();
 
 // Only use HTTPS redirection in production
 if (!app.Environment.IsDevelopment())
