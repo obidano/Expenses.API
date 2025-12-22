@@ -1,6 +1,7 @@
 using Expenses.API.framework.Data;
 using Expenses.API.Framework.Extensions;
 using Microsoft.EntityFrameworkCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,9 +10,17 @@ var builder = WebApplication.CreateBuilder(args);
 //string conn = "Data Source=DESKTOP-R25ASQT;Initial Catalog=asp_db_transactions;Integrated Security=True;Encrypt=False;Trust Server Certificate=True";
 string? conn = builder.Configuration.GetConnectionString("Default");
 if (string.IsNullOrEmpty(conn))
-    throw new InvalidOperationException("La chaîne de connexion 'Default' est manquante ou vide dans la configuration.");
+    throw new InvalidOperationException("La chaï¿½ne de connexion 'Default' est manquante ou vide dans la configuration.");
 
 builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(conn));
+
+// Configure Redis
+string? redisConnection = builder.Configuration.GetConnectionString("Redis");
+if (string.IsNullOrEmpty(redisConnection))
+    throw new InvalidOperationException("Redis connection string is missing or empty in configuration.");
+
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp => 
+    ConnectionMultiplexer.Connect(redisConnection));
 
 // add dependency injection for services
 builder.Services.AddApplicationServices();
@@ -23,6 +32,18 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+// Add CORS support
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAngularApp", policy =>
+    {
+        policy.WithOrigins("http://localhost:4200")
+              .AllowAnyHeader()
+              .AllowAnyMethod()
+              .AllowCredentials();
+    });
+});
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -33,7 +54,14 @@ if (app.Environment.IsDevelopment()) {
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// Use CORS - must be before UseHttpsRedirection
+app.UseCors("AllowAngularApp");
+
+// Only use HTTPS redirection in production
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAuthorization();
 
