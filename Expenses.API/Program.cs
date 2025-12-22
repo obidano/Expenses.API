@@ -20,7 +20,7 @@ if (string.IsNullOrEmpty(conn))
     throw new InvalidOperationException("La cha�ne de connexion 'Default' est manquante ou vide dans la configuration.");
 
 // Replace placeholders with environment variables for production secrets
-conn = conn.Replace("{SQL_PASSWORD}", Environment.GetEnvironmentVariable("SQL_PASSWORD") ?? "");
+conn = conn.Replace("{SQL-PASSWORD}", Environment.GetEnvironmentVariable("SQL-PASSWORD") ?? "");
 
 builder.Services.AddDbContext<AppDbContext>(opt => opt.UseSqlServer(conn, options =>
 {
@@ -37,10 +37,10 @@ if (string.IsNullOrEmpty(redisConnection))
     throw new InvalidOperationException("Redis connection string is missing or empty in configuration.");
 
 // Replace placeholders with environment variables for production secrets
-var redisPassword = Environment.GetEnvironmentVariable("REDIS_PASSWORD");
+var redisPassword = Environment.GetEnvironmentVariable("REDIS-PASSWORD");
 if (!string.IsNullOrEmpty(redisPassword))
 {
-    redisConnection = redisConnection.Replace("{REDIS_PASSWORD}", redisPassword);
+    redisConnection = redisConnection.Replace("{REDIS-PASSWORD}", redisPassword);
 }
 
 bool useEntraId = builder.Configuration.GetValue<bool>("Redis:UseEntraId", false);
